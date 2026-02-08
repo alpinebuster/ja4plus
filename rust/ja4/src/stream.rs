@@ -15,6 +15,41 @@ use crate::{
     tls, FormatFlags, Packet, Result, Sender,
 };
 
+#[derive(Serialize)]
+pub(crate) struct CsvRec {
+    stream: StreamId,
+    transport: Transport,
+    src_ip: String,
+    src_port: u32,
+    dst_ip: String,
+    dst_port: u32,
+    ja4t: Option<String>,
+    ja4: Option<String>,
+    ja4l: Option<String>,
+}
+
+impl From<OutRec> for CsvRec {
+    fn from(rec: OutRec) -> Self {
+        CsvRec {
+            stream: rec.stream,
+            transport: rec.transport,
+            src_ip: rec.sockets.src.to_string(),
+            src_port: rec.sockets.src_port,
+            dst_ip: rec.sockets.dst.to_string(),
+            dst_port: rec.sockets.dst_port,
+            ja4t: rec.payload.tcp.map(|o| o.ja4t),
+            ja4: rec.payload.tls
+                .as_ref()
+                .and_then(|tls| tls.client.as_ref())
+                .map(|client| match &client.ja4 {
+                    tls::Ja4Fingerprint::Sorted(s)
+                    | tls::Ja4Fingerprint::Unsorted(s) => s.clone(),
+                }),
+            ja4l: rec.payload.ja4l.map(|f| f.ja4l_c),
+        }
+    }
+}
+
 /// User-facing record containing data obtained from a TCP or UDP stream.
 #[derive(Debug, Serialize)]
 pub(crate) struct OutRec {

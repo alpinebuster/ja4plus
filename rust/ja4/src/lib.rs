@@ -27,18 +27,26 @@ pub use crate::error::Error;
 use crate::{
     conf::Conf,
     pcap::{Packet, PacketNum, Proto},
+    stream::CsvRec,
     stream::Streams,
 };
+use clap::ValueEnum;
 
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum OutputFormat {
+    Json,
+    Yaml,
+    Csv,
+}
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
 /// Calculate JA4 fingerprints
 #[derive(Debug, Parser)]
 #[command(version = env!("CARGO_PKG_VERSION"))]
 pub struct Cli {
-    /// JSON output (default is YAML)
-    #[arg(short, long)]
-    json: bool,
+    /// Output format
+    #[arg(long, value_enum, default_value = "yaml")]
+    format: OutputFormat,
     /// Output file path (default: stdout)
     #[arg(short = 'o', long)]
     pub output: Option<PathBuf>,
@@ -75,7 +83,7 @@ impl Cli {
     pub fn run(self) -> Result<()> {
         let conf = Conf::load()?;
         let Cli {
-            json,
+            format,
             with_raw,
             original_order,
             keylog_file,
@@ -84,7 +92,11 @@ impl Cli {
             output,
         } = self;
 
-        let ext = if json { "json" } else { "yaml" };
+        let ext = match format {
+            OutputFormat::Json => "json",
+            OutputFormat::Yaml => "yaml",
+            OutputFormat::Csv  => "csv",
+        };
         let output = output.map(|mut path| {
             if path.is_dir() {
                 return path.join(format!("ja4_output.{ext}"));
@@ -136,14 +148,27 @@ impl Cli {
         };
         // HACK: The purpose of the `io::stdout` mumbo-jumbo is to handle
         // BrokenPipe error. Rust throws it when the stdout is piped to `head`.
-        if json {
-            for rec in streams.into_out(flags) {
-                serde_json::to_writer(&mut *writer, &rec)?;
-                writeln!(writer)?;
+        match format {
+            OutputFormat::Json => {
+                for rec in streams.into_out(flags) {
+                    serde_json::to_writer(&mut *writer, &rec)?;
+                    writeln!(writer)?;
+                }
             }
-        } else {
-            let s = serde_yaml::to_string(&streams.into_out(flags).collect::<Vec<_>>())?;
-            writer.write_all(s.as_bytes())?;
+
+            OutputFormat::Csv => {
+                let mut wtr = csv::Writer::from_writer(writer);
+                for rec in streams.into_out(flags) {
+                    let csv_rec = CsvRec::from(rec);
+                    wtr.serialize(csv_rec)?;
+                }
+                wtr.flush()?;
+            }
+
+            OutputFormat::Yaml => {
+                let s = serde_yaml::to_string(&streams.into_out(flags).collect::<Vec<_>>())?;
+                writer.write_all(s.as_bytes())?;
+            }
         }
         Ok(())
     }
@@ -252,7 +277,7 @@ fn test_insta() {
         "pcap/*.pcap*",
         |path| {
             let cli = Cli {
-                json: false,
+                format: OutputFormat::Yaml,
                 with_raw: false,
                 original_order: false,
                 keylog_file: None,
@@ -261,11 +286,11 @@ fn test_insta() {
                 output: None,
             };
 
-            let mut output = Vec::<u8>::new();
+            let mut out = Vec::<u8>::new();
             cli.run().unwrap();
-            let output = String::from_utf8(output).unwrap();
+            let out = String::from_utf8(out).unwrap();
 
-            insta::assert_snapshot!(output);
+            insta::assert_snapshot!(out);
         }
     );
 }

@@ -21,7 +21,7 @@ pub(crate) struct Stream {
 #[derive(Debug, Serialize)]
 pub(crate) struct OutStream {
     /// JA4T fingerprint
-    ja4t: String,
+    pub(crate) ja4t: String,
 
     /// Packet number where the fingerprint was observed
     #[serde(skip_serializing_if = "Option::is_none")]

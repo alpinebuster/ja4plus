@@ -130,9 +130,9 @@ impl Stream {
 #[derive(Debug, Serialize)]
 pub(crate) struct OutStream {
     #[serde(flatten, skip_serializing_if = "Option::is_none")]
-    client: Option<OutClient>,
+    pub(crate) client: Option<OutClient>,
     #[serde(flatten, skip_serializing_if = "Option::is_none")]
-    server: Option<OutServer>,
+    pub(crate) server: Option<OutServer>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     tls_certs: Vec<OutX509>,
 }
@@ -375,20 +375,20 @@ impl PartsOfClientFingerprint {
 }
 
 #[derive(Debug, Serialize)]
-struct OutClient {
+pub(crate) struct OutClient {
     /// Server Name Indication (SNI), obtained from the TLS Client Hello packet.
     #[serde(rename = "tls_server_name", skip_serializing_if = "Option::is_none")]
     sni: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pkt_ja4: Option<PacketNum>,
     #[serde(flatten)]
-    ja4: Ja4Fingerprint,
+    pub(crate) ja4: Ja4Fingerprint,
     #[serde(flatten, skip_serializing_if = "Option::is_none")]
-    ja4_r: Option<Ja4RawFingerprint>,
+    pub(crate) ja4_r: Option<Ja4RawFingerprint>,
 }
 
 #[derive(Debug, Serialize)]
-enum Ja4Fingerprint {
+pub(crate) enum Ja4Fingerprint {
     #[serde(rename = "ja4")]
     Sorted(String),
     #[serde(rename = "ja4_o")]
@@ -396,7 +396,7 @@ enum Ja4Fingerprint {
 }
 
 #[derive(Debug, Serialize)]
-enum Ja4RawFingerprint {
+pub(crate) enum Ja4RawFingerprint {
     #[serde(rename = "ja4_r")]
     Sorted(String),
     #[serde(rename = "ja4_ro")]
@@ -470,7 +470,7 @@ impl ServerStats {
 }
 
 #[derive(Debug, Serialize)]
-struct OutServer {
+pub(crate) struct OutServer {
     #[serde(skip_serializing_if = "Option::is_none")]
     pkt_ja4s: Option<PacketNum>,
     ja4s: String,

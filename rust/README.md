@@ -127,7 +127,7 @@ Arguments:
   [CERTS]...  X.509 certificate(s) in DER or PEM format
 
 Options:
-  -j, --json      JSON output (default is YAML)
+  -j, --format <FORMAT> Output format: json, yaml, or csv (default: yaml)
   -o, --output <FILE> Write output to FILE instead of stdout
                       The file extension must match the output format:
                         - .json, when --json is set

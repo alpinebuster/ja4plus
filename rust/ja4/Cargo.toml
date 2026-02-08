@@ -16,6 +16,7 @@ publish = false
 clap.workspace = true
 color-eyre.workspace = true
 config = { version = "0.15", default-features = false, features = ["toml"] }
+csv = "1.4.0"
 duct = "0.13"
 fs-err.workspace = true
 hex.workspace = true

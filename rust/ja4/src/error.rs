@@ -37,6 +37,8 @@ pub enum Error {
     Json(#[from] serde_json::Error),
     #[error("YAML error: {0}")]
     Yaml(#[from] serde_yaml::Error),
+    #[error("CSV error: {0}")]
+    Csv(#[from] csv::Error),
     #[error("failed to parse tls.handshake.certificate: {0}")]
     X509(#[from] x509_parser::nom::Err<x509_parser::error::X509Error>),
 }

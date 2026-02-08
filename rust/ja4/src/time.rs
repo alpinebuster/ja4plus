@@ -17,8 +17,8 @@ pub(crate) use {tcp::Timestamps as TcpTimestamps, udp::Timestamps as UdpTimestam
 
 #[derive(Debug, Serialize)]
 pub(crate) struct Fingerprints {
-    ja4l_c: String,
-    ja4l_s: String,
+    pub(crate) ja4l_c: String,
+    pub(crate) ja4l_s: String,
 }
 
 pub(crate) trait Timestamps: Default {
