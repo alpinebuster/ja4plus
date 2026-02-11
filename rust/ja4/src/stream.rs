@@ -207,6 +207,7 @@ pub(crate) struct Streams<W: Write> {
     tcp: IndexMap<StreamId, AddressedStream<TcpTimestamps>>,
     udp: IndexMap<StreamId, AddressedStream<UdpTimestamps>>,
     writer: W,
+    csv_header_written: bool,
     flags: FormatFlags,
     output_format: OutputFormat,
     udp_idle_timeout: Duration,
@@ -219,6 +220,7 @@ impl<W: Write> Streams<W> {
             tcp: IndexMap::new(),
             udp: IndexMap::new(),
             writer,
+            csv_header_written: false,
             flags,
             output_format,
             udp_idle_timeout: Duration::from_secs(300),
@@ -309,6 +311,7 @@ impl<W: Write> Streams<W> {
             tcp,
             udp,
             writer: _,
+            csv_header_written: _, 
             flags: _,
             output_format: _,
             tcp_idle_timeout: _,
@@ -366,9 +369,18 @@ impl<W: Write> Streams<W> {
 
             match self.output_format {
                 OutputFormat::Csv => {
-                    let mut wtr = csv::Writer::from_writer(&mut self.writer);
+                    let write_header = !self.csv_header_written;
+
+                    let mut wtr = csv::WriterBuilder::new()
+                        .has_headers(write_header)
+                        .from_writer(&mut self.writer);
+
                     wtr.serialize(CsvRec::from(out))?;
                     wtr.flush()?;
+
+                    if write_header {
+                        self.csv_header_written = true;
+                    }
                 }
                 OutputFormat::Json => {
                     serde_json::to_writer(&mut self.writer, &out)?;
