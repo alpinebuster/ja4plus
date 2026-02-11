@@ -28,7 +28,6 @@ pub use crate::error::Error;
 use crate::{
     conf::Conf,
     pcap::{Packet, PacketNum, Proto},
-    stream::CsvRec,
     stream::Streams,
 };
 use clap::ValueEnum;
@@ -107,7 +106,7 @@ impl Cli {
         }
     }
 
-    fn run_with_writer(self, mut writer: impl Write) -> Result<()> {
+    fn run_with_writer(self, writer: impl Write) -> Result<()> {
         let conf = Conf::load()?;
         let Cli {
             format,
@@ -134,7 +133,11 @@ impl Cli {
         }
         let mut tshark = builder.spawn()?;
 
-        let mut streams = Streams::default();
+        let flags = FormatFlags {
+            with_raw,
+            original_order,
+        };
+        let mut streams = Streams::new(writer, flags, format);
 
         let mut packet_num = 0;
         while let Some(packet) = tshark.read().unwrap_or_else(|err| {
@@ -149,34 +152,12 @@ impl Cli {
             }
         }
 
-        let flags = FormatFlags {
-            with_raw,
-            original_order,
-        };
         // HACK: The purpose of the `io::stdout` mumbo-jumbo is to handle
         // BrokenPipe error. Rust throws it when the stdout is piped to `head`.
-        match format {
-            OutputFormat::Json => {
-                for rec in streams.into_out(flags) {
-                    serde_json::to_writer(&mut writer, &rec)?;
-                    writeln!(writer)?;
-                }
-            }
-
-            OutputFormat::Csv => {
-                let mut wtr = csv::Writer::from_writer(writer);
-                for rec in streams.into_out(flags) {
-                    let csv_rec = CsvRec::from(rec);
-                    wtr.serialize(csv_rec)?;
-                }
-                wtr.flush()?;
-            }
-
-            OutputFormat::Yaml => {
-                let s = serde_yaml::to_string(&streams.into_out(flags).collect::<Vec<_>>())?;
-                writer.write_all(s.as_bytes())?;
-            }
+        if let Err(err) = streams.flush_all() {
+            tracing::info!("flush_all failed: {:?}", err);
         }
+
         Ok(())
     }
 }

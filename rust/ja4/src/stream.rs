@@ -7,12 +7,16 @@
 
 use indexmap::{map::Entry, IndexMap};
 use serde::Serialize;
+use std::{
+    io::Write,
+    time::{Duration, Instant},
+};
 
 use crate::{
     conf::Conf,
     http, ssh, tcp,
     time::{self, TcpTimestamps, Timestamps, UdpTimestamps},
-    tls, FormatFlags, Packet, Result, Sender,
+    tls, FormatFlags, OutputFormat, Packet, Result, Sender,
 };
 
 #[derive(Serialize)]
@@ -125,6 +129,7 @@ impl<T: Timestamps> Stream<T> {
 struct AddressedStream<T> {
     sockets: SocketPair,
     stream: Stream<T>,
+    last_seen: Instant,
 }
 
 impl<T: Timestamps> AddressedStream<T> {
@@ -132,10 +137,13 @@ impl<T: Timestamps> AddressedStream<T> {
         Self {
             sockets,
             stream: Stream::default(),
+            last_seen: Instant::now(),
         }
     }
 
     fn update(&mut self, pkt: &Packet, conf: &Conf, store_pkt_num: bool, guessed_sender: Sender) {
+        self.last_seen = Instant::now();
+
         if conf.tcp.enabled {
             if let Err(error) = self
                 .stream
@@ -187,16 +195,37 @@ impl<T: Timestamps> AddressedStream<T> {
             }
         }
     }
+
+    fn is_idle(&self, timeout: Duration) -> bool {
+        self.last_seen.elapsed() >= timeout
+    }
 }
 
 /// Information collected from the capture file.
-#[derive(Debug, Default)]
-pub(crate) struct Streams {
+#[derive(Debug)]
+pub(crate) struct Streams<W: Write> {
     tcp: IndexMap<StreamId, AddressedStream<TcpTimestamps>>,
     udp: IndexMap<StreamId, AddressedStream<UdpTimestamps>>,
+    writer: W,
+    flags: FormatFlags,
+    output_format: OutputFormat,
+    udp_idle_timeout: Duration,
+    tcp_idle_timeout: Duration,
 }
 
-impl Streams {
+impl<W: Write> Streams<W> {
+    pub fn new(writer: W, flags: FormatFlags, output_format: OutputFormat) -> Self {
+        Self {
+            tcp: IndexMap::new(),
+            udp: IndexMap::new(),
+            writer,
+            flags,
+            output_format,
+            udp_idle_timeout: Duration::from_secs(300),
+            tcp_idle_timeout: Duration::from_secs(1200),
+        }
+    }
+
     pub(crate) fn update(&mut self, pkt: &Packet, conf: &Conf, store_pkt_num: bool) -> Result<()> {
         tracing::debug!(%pkt.num, "processing packet");
         let Some(attrs) = StreamAttrs::new(pkt)? else {
@@ -224,6 +253,8 @@ impl Streams {
 
         match transport {
             Transport::Tcp => {
+                let mut remove_after = false;
+
                 let stream = match self.tcp.entry(stream_id) {
                     Entry::Vacant(x) => x.insert(AddressedStream::new(sockets)),
                     Entry::Occupied(x) => {
@@ -237,6 +268,16 @@ impl Streams {
                     store_pkt_num,
                     guess_sender(&sender_ip, &stream.sockets),
                 );
+
+                if is_tcp_closed(pkt) {
+                    remove_after = true;
+                }
+
+                if remove_after || stream.is_idle(self.tcp_idle_timeout) {
+                    if let Some(closed) = self.tcp.swap_remove(&stream_id) {
+                        self.export_stream(stream_id, closed, Transport::Tcp)?;
+                    }
+                }
             }
             Transport::Udp => {
                 let stream = match self.udp.entry(stream_id) {
@@ -252,15 +293,34 @@ impl Streams {
                     store_pkt_num,
                     guess_sender(&sender_ip, &stream.sockets),
                 );
+
+                if stream.is_idle(self.udp_idle_timeout) {
+                    if let Some(closed) = self.udp.swap_remove(&stream_id) {
+                        self.export_stream(stream_id, closed, Transport::Udp)?;
+                    }
+                }
             }
         }
         Ok(())
     }
 
     pub(crate) fn into_out(self, flags: FormatFlags) -> impl Iterator<Item = OutRec> {
-        let Self { tcp, udp } = self;
+        let Self {
+            tcp,
+            udp,
+            writer: _,
+            flags: _,
+            output_format: _,
+            tcp_idle_timeout: _,
+            udp_idle_timeout: _,
+        } = self;
+
         let tcp = tcp.into_iter().filter_map(move |(sid, addressed)| {
-            let AddressedStream { sockets, stream } = addressed;
+            let AddressedStream {
+                sockets,
+                stream,
+                last_seen: _,
+            } = addressed;
             Some(OutRec {
                 stream: sid,
                 transport: Transport::Tcp,
@@ -269,7 +329,11 @@ impl Streams {
             })
         });
         let udp = udp.into_iter().filter_map(move |(sid, addressed)| {
-            let AddressedStream { sockets, stream } = addressed;
+            let AddressedStream {
+                sockets,
+                stream,
+                last_seen: _,
+            } = addressed;
             Some(OutRec {
                 stream: sid,
                 transport: Transport::Udp,
@@ -279,10 +343,78 @@ impl Streams {
         });
         tcp.chain(udp)
     }
+
+    fn export_stream(
+        &mut self,
+        sid: StreamId,
+        addressed: AddressedStream<impl Timestamps>,
+        transport: Transport,
+    ) -> Result<()> {
+        let AddressedStream {
+            sockets,
+            stream,
+            last_seen: _,
+        } = addressed;
+
+        if let Some(payload) = stream.into_out(self.flags) {
+            let out = OutRec {
+                stream: sid,
+                transport,
+                sockets,
+                payload,
+            };
+
+            match self.output_format {
+                OutputFormat::Csv => {
+                    let mut wtr = csv::Writer::from_writer(&mut self.writer);
+                    wtr.serialize(CsvRec::from(out))?;
+                    wtr.flush()?;
+                }
+                OutputFormat::Json => {
+                    serde_json::to_writer(&mut self.writer, &out)?;
+                    writeln!(self.writer)?;
+                }
+                OutputFormat::Yaml => {
+                    let s = serde_yaml::to_string(&out)?;
+                    self.writer.write_all(s.as_bytes())?;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn flush_all(&mut self) -> Result<()> {
+        let tcp_streams: Vec<_> = self.tcp.drain(..).collect();
+        for (sid, s) in tcp_streams {
+            self.export_stream(sid, s, Transport::Tcp)?;
+        }
+
+        let udp_streams: Vec<_> = self.udp.drain(..).collect();
+        for (sid, s) in udp_streams {
+            self.export_stream(sid, s, Transport::Udp)?;
+        }
+
+        Ok(())
+    }
 }
 
 // -----------------------------------------------------------------------------
 // Auxiliary definitions
+
+fn is_tcp_closed(pkt: &Packet) -> bool {
+    if let Some(tcp) = pkt.find_proto("tcp") {
+        if let Ok(flags) = tcp.first("tcp.flags") {
+            let flags = u16::from_str_radix(flags.trim_start_matches("0x"), 16).unwrap_or(0);
+
+            const FIN: u16 = 0x01;
+            const RST: u16 = 0x04;
+
+            return (flags & FIN != 0) || (flags & RST != 0);
+        }
+    }
+    false
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum IpVersion {
