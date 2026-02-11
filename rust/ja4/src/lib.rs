@@ -15,10 +15,11 @@ mod tcp;
 mod time;
 mod tls;
 
-use std::fs::File;
-use std::io;
-use std::io::{BufWriter, Write};
-use std::path::PathBuf;
+use std::{
+    fs::File,
+    io::{self, BufWriter, Write},
+    path::PathBuf,
+};
 
 use clap::Parser;
 use rtshark::RTSharkBuilder;
@@ -48,7 +49,7 @@ pub struct Cli {
     #[arg(long, value_enum, default_value = "yaml")]
     format: OutputFormat,
     /// Output file path (default: stdout)
-    #[arg(short = 'o', long)]
+    #[arg(short, long)]
     pub output: Option<PathBuf>,
     /// Include raw (unhashed) fingerprints in the output
     #[arg(short = 'r', long)]
@@ -79,25 +80,14 @@ pub struct Cli {
 }
 
 impl Cli {
-    /// Write JSON with JA4 fingerprints to the I/O stream.
-    pub fn run(self) -> Result<()> {
-        let conf = Conf::load()?;
-        let Cli {
-            format,
-            with_raw,
-            original_order,
-            keylog_file,
-            with_packet_numbers,
-            pcap,
-            output,
-        } = self;
-
-        let ext = match format {
+    fn normalized_output_path(&self) -> Option<PathBuf> {
+        let ext = match self.format {
             OutputFormat::Json => "json",
+            OutputFormat::Csv => "csv",
             OutputFormat::Yaml => "yaml",
-            OutputFormat::Csv  => "csv",
         };
-        let output = output.map(|mut path| {
+
+        self.output.clone().map(|mut path| {
             if path.is_dir() {
                 return path.join(format!("ja4_output.{ext}"));
             }
@@ -106,11 +96,28 @@ impl Cli {
                 path.set_extension(ext);
             }
             path
-        });
-        let mut writer: Box<dyn Write> = match output {
-            Some(path) => Box::new(BufWriter::new(File::create(path)?)),
-            None => Box::new(io::stdout()),
-        };
+        })
+    }
+
+    /// Write JSON with JA4 fingerprints to the I/O stream.
+    pub fn run(self) -> Result<()> {
+        match self.normalized_output_path() {
+            Some(path) => self.run_with_writer(BufWriter::new(File::create(path)?)),
+            None => self.run_with_writer(io::stdout()),
+        }
+    }
+
+    fn run_with_writer(self, mut writer: impl Write) -> Result<()> {
+        let conf = Conf::load()?;
+        let Cli {
+            format,
+            with_raw,
+            original_order,
+            keylog_file,
+            with_packet_numbers,
+            pcap,
+            output: _,
+        } = self;
 
         let Some(pcap_path) = pcap.to_str() else {
             return Err(Error::NonUtf8Path(pcap));
@@ -151,7 +158,7 @@ impl Cli {
         match format {
             OutputFormat::Json => {
                 for rec in streams.into_out(flags) {
-                    serde_json::to_writer(&mut *writer, &rec)?;
+                    serde_json::to_writer(&mut writer, &rec)?;
                     writeln!(writer)?;
                 }
             }
@@ -286,11 +293,11 @@ fn test_insta() {
                 output: None,
             };
 
-            let mut out = Vec::<u8>::new();
-            cli.run().unwrap();
-            let out = String::from_utf8(out).unwrap();
+            let mut output = Vec::<u8>::new();
+            cli.run_with_writer(&mut output).unwrap();
+            let output = String::from_utf8(output).unwrap();
 
-            insta::assert_snapshot!(out);
+            insta::assert_snapshot!(output);
         }
     );
 }

@@ -38,12 +38,13 @@ impl From<OutRec> for CsvRec {
             dst_ip: rec.sockets.dst.to_string(),
             dst_port: rec.sockets.dst_port,
             ja4t: rec.payload.tcp.map(|o| o.ja4t),
-            ja4: rec.payload.tls
+            ja4: rec
+                .payload
+                .tls
                 .as_ref()
                 .and_then(|tls| tls.client.as_ref())
                 .map(|client| match &client.ja4 {
-                    tls::Ja4Fingerprint::Sorted(s)
-                    | tls::Ja4Fingerprint::Unsorted(s) => s.clone(),
+                    tls::Ja4Fingerprint::Sorted(s) | tls::Ja4Fingerprint::Unsorted(s) => s.clone(),
                 }),
             ja4l: rec.payload.ja4l.map(|f| f.ja4l_c),
         }
